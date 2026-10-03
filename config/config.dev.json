@@ -1,0 +1,9 @@
+{
+  "dbconfig": {
+    "host": "localhost",
+    "user": "weeb",
+    "password": "mysecretpassword",
+    "database": "weeb",
+    "port": 3306
+  }
+}

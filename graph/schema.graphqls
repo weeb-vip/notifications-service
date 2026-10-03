@@ -1,0 +1,35 @@
+type Query {
+    """
+    What the people the viewer follows have been adding to their lists and
+    moving around. Newest first. Only list adds and status or score changes
+    appear; episode and chapter progress never does.
+    """
+    feed(page: Int!, limit: Int!): ActivityPaginated! @Authenticated
+    """
+    One user's own recent activity, for their public page. Empty unless their
+    lists are public, which is checked against user-service at query time.
+    """
+    userActivity(userID: ID!, page: Int!, limit: Int!): ActivityPaginated!
+    "The viewer's inbox, newest first."
+    notifications(page: Int!, limit: Int!, unreadOnly: Boolean): NotificationPaginated! @Authenticated
+    unreadNotificationCount: Int! @Authenticated
+    """
+    The full type x channel matrix. Rows the viewer never touched carry the
+    default: in-app on, push and email off.
+    """
+    notificationPreferences: [NotificationPreference!]! @Authenticated
+    pushSubscriptions: [PushSubscription!]! @Authenticated
+}
+
+type Mutation {
+    "Marks the viewer's own notifications read. Ids that are not theirs are ignored."
+    markNotificationsRead(ids: [ID!]!): Boolean! @Authenticated
+    markAllNotificationsRead: Boolean! @Authenticated
+    updateNotificationPreference(type: NotificationType!, channel: NotificationChannel!, enabled: Boolean!): NotificationPreference! @Authenticated
+    """
+    Registers a device for push. The endpoint is the identity: registering it
+    again updates the keys and the owner rather than adding a second row.
+    """
+    registerPushSubscription(input: PushSubscriptionInput!): PushSubscription! @Authenticated
+    unregisterPushSubscription(endpoint: String!): Boolean! @Authenticated
+}

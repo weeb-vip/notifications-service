@@ -1,0 +1,105 @@
+name: Migrations
+
+# Runs the Postgres migrations against a real Postgres before they are ever
+# pointed at RDS.
+#
+# The MySQL chain these replace could not be checked this way. Applying all of
+# anime-api's to an empty database fails partway, so nothing could be built from
+# migrations alone -- which is exactly the state this job exists to prevent the
+# Postgres chain from reaching unnoticed.
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'db/migrations/**'
+      - '.github/workflows/migrations.yaml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'db/migrations/**'
+      - '.github/workflows/migrations.yaml'
+
+jobs:
+  postgres:
+    name: Postgres migrations
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Pinned to the RDS engine version. A migration that works on a newer
+        # Postgres but not on 16.4 is a failure worth having here rather than
+        # during an apply.
+        image: postgres:16.4
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: svc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_URL: postgres://postgres:postgres@localhost:5432/svc_test?sslmode=disable
+      MIGRATIONS: db/migrations
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install golang-migrate
+        # --proto '=https' pins the scheme across redirects: -L will otherwise
+        # follow a 302 to plain HTTP, and this pipes into tar as root.
+        run: |
+          curl -sSfL --proto '=https' --tlsv1.2 \
+            https://github.com/golang-migrate/migrate/releases/download/v4.17.1/migrate.linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin migrate
+          migrate -version
+
+      - name: Migrate up
+        run: migrate -path "$MIGRATIONS" -database "$DB_URL" up
+
+      # Applying without error is not the same as producing the intended schema.
+      - name: Verify schema
+        run: |
+          psql "$DB_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE n int;
+          BEGIN
+            SELECT count(*) INTO n FROM information_schema.tables
+              WHERE table_schema='public' AND table_type='BASE TABLE'
+                AND table_name <> 'schema_migrations';
+            -- activities, feed_items, notifications, notification_preferences, push_subscriptions.
+            IF n <> 5 THEN
+              RAISE EXCEPTION 'expected 5 tables, found %', n;
+            END IF;
+
+            SELECT count(*) INTO n FROM information_schema.columns
+              WHERE table_schema='public' AND table_name <> 'schema_migrations';
+            -- 11 + 4 + 9 + 5 + 9 = 38.
+            IF n <> 38 THEN
+              RAISE EXCEPTION 'expected 38 columns, found %', n;
+            END IF;
+          END $$;
+          SQL
+
+      # Down migrations are usually written and never run. This is the only place
+      # they execute, and re-running up proves down left something the chain can
+      # rebuild from.
+      - name: Migrate down, then up again
+        run: |
+          migrate -path "$MIGRATIONS" -database "$DB_URL" down -all
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -c "
+            DO \$\$
+            DECLARE n int;
+            BEGIN
+              SELECT count(*) INTO n FROM information_schema.tables
+                WHERE table_schema='public' AND table_type='BASE TABLE'
+                  AND table_name <> 'schema_migrations';
+              IF n <> 0 THEN
+                RAISE EXCEPTION 'down left % tables behind', n;
+              END IF;
+            END \$\$;"
+          migrate -path "$MIGRATIONS" -database "$DB_URL" up

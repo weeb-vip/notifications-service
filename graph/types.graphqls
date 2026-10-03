@@ -1,0 +1,118 @@
+"""
+Something a user did to one of their lists, as shown in a feed.
+
+The service stores ids only. actor, anime and work are resolved by their
+owning subgraphs through the router, so this type never goes stale when a
+username or a title changes.
+"""
+type Activity @key(fields: "id") {
+    id: ID!
+    type: ActivityType!
+    actor: PublicUser!
+    anime: Anime
+    work: Work
+    "The list status after the change, in the owning service's vocabulary."
+    status: String
+    "Set for status changes: the status before."
+    previousStatus: String
+    score: Float
+    occurredAt: String!
+}
+
+enum ActivityType {
+    ANIME_ADDED
+    ANIME_STATUS_CHANGED
+    ANIME_SCORED
+    WORK_ADDED
+    WORK_STATUS_CHANGED
+    WORK_SCORED
+}
+
+type ActivityPaginated {
+    page: Int!
+    limit: Int!
+    total: Int!
+    activities: [Activity!]!
+}
+
+"""
+One item in a user's inbox.
+"""
+type Notification @key(fields: "id") {
+    id: ID!
+    type: NotificationType!
+    "Who caused it, when someone did."
+    actor: PublicUser
+    "The activity it is about, when it is about one."
+    activity: Activity
+    "Type-specific details, as a JSON document."
+    payload: String
+    readAt: String
+    createdAt: String!
+}
+
+enum NotificationType {
+    "Someone asked to follow the viewer, who requires approval."
+    FOLLOW_REQUESTED
+    "A user the viewer asked to follow approved the request."
+    FOLLOW_ACCEPTED
+    "Someone started following the viewer."
+    NEW_FOLLOWER
+}
+
+enum NotificationChannel {
+    IN_APP
+    PUSH
+    EMAIL
+}
+
+type NotificationPaginated {
+    page: Int!
+    limit: Int!
+    total: Int!
+    notifications: [Notification!]!
+}
+
+type NotificationPreference {
+    type: NotificationType!
+    channel: NotificationChannel!
+    enabled: Boolean!
+}
+
+enum PushPlatform {
+    WEB
+    IOS
+    ANDROID
+}
+
+input PushSubscriptionInput {
+    platform: PushPlatform!
+    "Web Push endpoint URL, or the FCM/APNs device token."
+    endpoint: String!
+    "Web Push only: the subscription's P-256 public key."
+    p256dh: String
+    "Web Push only: the subscription's auth secret."
+    auth: String
+    userAgent: String
+}
+
+type PushSubscription {
+    id: ID!
+    platform: PushPlatform!
+    endpoint: String!
+    createdAt: String!
+}
+
+# Entities owned by other subgraphs. Only the key is declared here; the router
+# fetches everything else from user-service and anime-api.
+extend type PublicUser @key(fields: "id") @goModel(model: "github.com/weeb-vip/notifications-service/graph/model.PublicUser") {
+    id: ID! @external
+}
+
+extend type Anime @key(fields: "id") @goModel(model: "github.com/weeb-vip/notifications-service/graph/model.Anime") {
+    id: ID! @external
+}
+
+extend type Work @key(fields: "id") @goModel(model: "github.com/weeb-vip/notifications-service/graph/model.Work") {
+    id: ID! @external
+}

@@ -1,0 +1,22 @@
+# lint-disable defined-types-are-used
+"helper scalar for IDE autocomplete & lint"
+scalar _Any
+# lint-enable defined-types-are-used
+
+"helper scalar for IDE autocomplete & lint"
+scalar _FieldSet
+
+# a union of all types that use the @key directive
+"helper scalar for IDE autocomplete & lint"
+directive @external on FIELD_DEFINITION
+
+"helper scalar for IDE autocomplete & lint"
+directive @requires(fields: _FieldSet!) on FIELD_DEFINITION
+
+"helper scalar for IDE autocomplete & lint"
+directive @provides(fields: _FieldSet!) on FIELD_DEFINITION
+
+"helper scalar for IDE autocomplete & lint"
+directive @key(fields: _FieldSet!) repeatable on OBJECT | INTERFACE
+
+type Anime{}
