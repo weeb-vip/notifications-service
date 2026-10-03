@@ -1,0 +1,119 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  test:
+    name: unit and integration tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Pinned to the RDS engine version, same as migrations.yaml.
+        image: postgres:16.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: weeb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DBHOST: localhost
+      DBPORT: "5432"
+      DBUSERNAME: postgres
+      DBPASSWORD: postgres
+      DBNAME: weeb
+      DBSSL: disable
+      DBMIGRATIONTABLE: __migrations_notifications-service
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Migrate the test database
+        run: go run ./cmd/main.go migrate up
+      - name: Unit tests
+        run: go test -count=1 ./...
+      - name: Integration tests
+        run: make test-integration
+
+  build:
+
+    runs-on: ubuntu-latest
+    needs: [ test ]
+
+    steps:
+      - name: Set repo name environment variable
+        run: |
+          echo "REPO_NAME=${GITHUB_REPOSITORY#*/}" >> $GITHUB_ENV
+      - uses: actions/checkout@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+      - name: Build the Docker image
+        run: |
+          docker build --build-arg VERSION=${{ github.sha }} -t ${{ env.REPO_NAME }} .
+          docker tag ${{ env.REPO_NAME }} ${{ secrets.REGISTRY }}/weeb-vip/${{ env.REPO_NAME }}:${{ github.sha }}
+      - name: Login to DockerHub
+        uses: docker/login-action@v1
+        with:
+          registry: ${{ secrets.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Push to Harbor Container Registry (test)
+        run: |
+          docker push ${{ secrets.REGISTRY }}/weeb-vip/${{ env.REPO_NAME }}:${{ github.sha }}
+          docker save ${{ env.REPO_NAME }} >> ${{ env.REPO_NAME }}.tar
+      - name: Set env
+        run: |
+          echo "REPO_NAME=${GITHUB_REPOSITORY#*/}" >> $GITHUB_ENV
+      - name: release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          DOCKER_REPO_TEST: ${{ secrets.REGISTRY }}/weeb-vip/${{ env.REPO_NAME }}
+          DOCKER_REPO_PROD: ${{ secrets.REGISTRY }}/weeb-vip/${{ env.REPO_NAME }}
+        with:
+          semantic_version: 18
+          extra_plugins: |
+            @semantic-release/git@10.0.1
+            @semantic-release/exec@6.0.2
+            @semantic-release/changelog@6.0.1
+
+      # Only touch argocd when semantic-release actually published a release.
+      # Without this guard the steps below ran on every push/PR, re-committing
+      # (or, with no tags, blanking) the service's tag in argocd.
+      - name: checkout argocd repo
+        if: steps.semantic.outputs.new_release_published == 'true'
+        uses: actions/checkout@v3
+        with:
+          repository: 'weeb-vip/weeb-argocd'
+          token: ${{ secrets.ACCESS_TOKEN }}
+          path: 'argocd'
+      - name: deploy to argocd
+        if: steps.semantic.outputs.new_release_published == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+          REPO_NAME: ${{ env.REPO_NAME }}
+          RELEASE_VERSION: ${{ steps.semantic.outputs.new_release_version }}
+        # pull argocd repo and push to argocd
+        run: |
+          RELEASE_VERSION=$(echo $RELEASE_VERSION | sed 's/v//')
+          cd argocd && find . -type f -name '*.yaml' -print0 | xargs -0 sed -E -i 's/(tag:[[:space:]]).*( # '"$REPO_NAME"')/\1'"$RELEASE_VERSION"'\2/'
+          git config --global user.email "noreply@weeb.vip"
+          git config --global user.name "weeb-vip"
+          git add .
+          git commit -m "feat: $REPO_NAME $RELEASE_VERSION"
+          git push origin main

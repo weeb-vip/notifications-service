@@ -1,0 +1,8 @@
+# lint-disable defined-types-are-used
+"RFC3339 formatted DateTime"
+scalar Time
+
+"RFC3339 formatted Date"
+scalar Date
+
+scalar Int64
